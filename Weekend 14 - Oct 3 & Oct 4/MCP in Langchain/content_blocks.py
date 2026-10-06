@@ -28,7 +28,7 @@ async def access_multimodal_tool_content(server) -> dict:
     return result
 
 async def main():
-    server = Path("simple_mcp_server.py")
+    server = Path("image_content.py")
     await access_multimodal_tool_content(server)
 
 
