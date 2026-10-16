@@ -229,3 +229,5 @@ credentials/
 # Force inclusion of frontend source files that might be caught by broad rules
 !frontend/src/lib/
 !frontend/src/lib/**
+
+gha-creds-*.json

@@ -28,3 +28,5 @@ logs/
 # Node (frontend build happens inside Docker)
 frontend/node_modules/
 frontend/dist/
+
+gha-creds-*.json
