@@ -100,16 +100,120 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member="serviceAccount:github-deployer@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/resourcemanager.projectIamAdmin"
 
-gcloud iam service-accounts keys create github-deployer-key.json \
-  --iam-account=github-deployer@${PROJECT_ID}.iam.gserviceaccount.com
+# gcloud iam service-accounts keys create github-deployer-key.json \
+#  --iam-account=github-deployer@${PROJECT_ID}.iam.gserviceaccount.com
 ```
 
-The last command makes a file, `github-deployer-key.json`. It is a **password for the robot**.
+<!-- The last command makes a file, `github-deployer-key.json`. It is a **password for the robot**.
 
 > **Keep it safe.**
 > - Never commit it, email it, or paste it anywhere except the GitHub secret in step 8. Delete the file afterwards.
 > - These permissions are broad on purpose, to keep the setup simple. A real company would give the robot only what it needs.
 > - If it ever leaks: Console → IAM & Admin → Service accounts → `github-deployer` → Keys → delete it.
+ -->
+## Set up Workload Identity Federation (WIF) instead of service account keys
+### Step 1:
+```bash
+export PROJECT_ID="YOUR_PROJECT_ID"
+export GITHUB_OWNER="YOUR_GITHUB_USERNAME_OR_ORG"
+export GITHUB_REPO="meridian-ai-learner-main"
+
+export POOL_ID="github-actions"
+export PROVIDER_ID="github"
+export SA_EMAIL="github-deployer@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud config set project "$PROJECT_ID"
+
+export PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" \
+  --format='value(projectNumber)')"
+```
+### Step 2:
+2. Enable the authentication APIs
+
+```bash
+gcloud services enable \
+  iam.googleapis.com \
+  iamcredentials.googleapis.com \
+  sts.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  --project="$PROJECT_ID"
+```
+
+### Step 3:
+Get GitHub’s numeric repository and owner IDs
+
+```bash
+curl -fsSL "https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}" \
+  -o /tmp/meridian-github-repo.json
+
+export REPO_ID="$(python3 -c \
+  'import json; print(json.load(open("/tmp/meridian-github-repo.json"))["id"])')"
+
+export OWNER_ID="$(python3 -c \
+  'import json; print(json.load(open("/tmp/meridian-github-repo.json"))["owner"]["id"])')"
+
+echo "Repository ID: $REPO_ID"
+echo "Owner ID: $OWNER_ID"
+```
+
+For a private repository, retrieve these through an authenticated GitHub CLI session instead:
+
+```bash
+gh auth login
+
+export REPO_ID="$(gh api "repos/${GITHUB_OWNER}/${GITHUB_REPO}" --jq '.id')"
+export OWNER_ID="$(gh api "repos/${GITHUB_OWNER}/${GITHUB_REPO}" --jq '.owner.id')"
+```
+
+### Step 4: Create the workload identity pool and provider
+```bash
+gcloud iam workload-identity-pools create "$POOL_ID" \
+  --project="$PROJECT_ID" \
+  --location="global" \
+  --display-name="GitHub Actions"
+```
+Create its GitHub provider:
+```bash
+gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
+  --project="$PROJECT_ID" \
+  --location="global" \
+  --workload-identity-pool="$POOL_ID" \
+  --display-name="GitHub repository deployments" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository_id=assertion.repository_id,attribute.repository_owner_id=assertion.repository_owner_id,attribute.ref=assertion.ref" \
+  --attribute-condition="assertion.repository_owner_id == '${OWNER_ID}' && assertion.repository_id == '${REPO_ID}' && assertion.ref == 'refs/heads/main'"
+```
+
+### Step 5: Allow that repository to impersonate the robot
+```bash
+gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+  --project="$PROJECT_ID" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.repository_id/${REPO_ID}"
+```
+
+### Step 6: Add the replacement values to GitHub
+Print the two values:
+```bash
+echo "GCP_WORKLOAD_IDENTITY_PROVIDER=projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/providers/${PROVIDER_ID}"
+echo "GCP_SERVICE_ACCOUNT=${SA_EMAIL}"
+```
+In your GitHub repository, open:
+Settings → Secrets and variables → Actions
+
+Under Variables, create:
+| Variable | Value |
+|---|---|
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | The full `projects/…/providers/github` value printed above |
+| `GCP_SERVICE_ACCOUNT` | `github-deployer@YOUR_PROJECT_ID.iam.gserviceaccount.com` |
+
+Under Secrets, create:
+| Secret | Value |
+|---|---|
+| `GCP_PROJECT_ID` | Your project ID |
+| `GOOGLE_API_KEY` | Your Gemini API key |
+
+
 
 ### Step 7 · Put the code on your own GitHub
 

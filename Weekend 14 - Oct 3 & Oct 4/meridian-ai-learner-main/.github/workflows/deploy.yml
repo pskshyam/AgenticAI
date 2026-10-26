@@ -42,6 +42,9 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
+      - name: Verify Google Cloud identity
+        run: gcloud auth list --filter=status:ACTIVE --format="value(account)"
+
       # --- Phase 1: Enable APIs ---
       - name: Enable Required GCP APIs
         run: |
